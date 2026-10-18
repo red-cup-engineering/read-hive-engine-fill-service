@@ -4,8 +4,7 @@
   "description": "Reads one Hive-Engine `marketpools.swapTokens`, `market.sell`, or `market.buy` fill by transaction id from at least two public nodes, read-only, shaping it into the standard venue-fill record or refusing (never shaping a fill) when the nodes disagree on `databaseHash`, the operation cannot be resolved unambiguously, its contract/action is unsupported, or its logs carry no completed transfer to and from the queried account.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/red-cup-engineering/computer-systems-engineering-services-section.git",
-    "directory": "services/computer-blockchain-system-services-section/services/hive-engineering-services-section/services/hive-ledger-services-section/services/read-hive-engine-fill-service"
+    "url": "git+https://github.com/red-cup-engineering/read-hive-engine-fill-service.git"
   },
   "type": "module",
   "private": false,
