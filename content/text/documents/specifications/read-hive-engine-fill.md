@@ -1,24 +1,36 @@
 # read-hive-engine-fill
 ## Requirements
-- `two-node-witness`: The operation must query `getTransactionInfo` at `<node>/rpc/blockchain` for every node in `input.nodes` (at least two) and carry each node's `databaseHash` forward as a witness.
+- `two-node-witness`: The operation must query `getTransactionInfo` at `<node>/rpc/blockchain` for every node in `input.nodes` (at least {{minimum-witness-nodes}}) and carry each node's `databaseHash` forward as a witness. [claims: minimum-witness-nodes]
 - `exact-operation-resolution`: When a node's result is an array of operations sharing one underlying Hive transaction, the operation must resolve to the single entry whose own `transactionId` exactly equals `input.transactionId`, refusing with reason `ambiguous-result` when no such single entry exists.
-- `account-scoped-transfer-legs`: The operation must read the paid leg from the `tokens.transferToContract` event whose `data.from` equals `input.account` and the received leg from the `tokens.transferFromContract` event whose `data.to` equals `input.account`, so a third party's leg in the same transaction (a market counterparty) is never mistaken for the queried account's own settlement.
+- `account-scoped-transfer-legs`: The operation must read the paid leg from the `tokens.transferToContract` event whose `data.from` equals `input.account` and the received leg from the `tokens.transferFromContract` event whose `data.to` equals `input.account`, so a third party's leg in the same transaction (a market counterparty; measured: {{counterparty-leg-count}} such leg beside the account's own two) is never mistaken for the queried account's own settlement. [claims: counterparty-leg-count]
 - `contract-action-shape`: A `marketpools.swapTokens` or `market.buy` resolves to `side: "buy"` (base = received symbol, quote = paid symbol); a `market.sell` resolves to `side: "sell"` (base = paid symbol, quote = received symbol).
+- `crossing-transaction-settles`: A fill is read from the transaction of the order that crossed the book; the placement transaction of a resting order carries only its escrow leg (measured: {{resting-transaction-event-count}} event, the `tokens.transferToContract`), so reading it refuses with reason `no-completed-transfer` and is never shaped as a fill. [claims: resting-transaction-event-count]
+- `unreachable-path-is-no-witness`: The operation calls `<node>/rpc/blockchain` and no other path; a node that returns no result there (measured: {{path-miss-node-count}} of the probed public nodes answer {{path-miss-status}} there and serve only `/blockchain`) is refused as `ambiguous-result` and never counted as a witness. [claims: path-miss-node-count, path-miss-status]
 - `informational-pool-fee`: A `marketpools.swapTokens` event's `fee` data must be carried forward as `venuePoolFee`, informational only, never as `feeAmount`.
 ## Prohibitions
-- `no-booking-on-disagreement`: The operation must return a `witness-disagreement` refusal, never a shaped fill, when any two queried nodes' `databaseHash` values differ.
-- `no-unsupported-action-fill`: The operation must refuse with reason `unsupported-contract-action`, never shape a fill, for any contract/action other than `marketpools.swapTokens`, `market.sell`, or `market.buy`.
-- `no-missing-transfer-fill`: The operation must refuse with reason `no-completed-transfer`, never shape a fill, when the resolved operation's logs carry no matching paid-and-received transfer pair for `input.account`.
+- `no-booking-on-disagreement`: The operation must return a `witness-disagreement` refusal, never a shaped fill, when any pair of queried nodes' `databaseHash` values differ. [claims: agreeing-node-count]
+- `no-unsupported-action-fill`: The operation must refuse with reason `unsupported-contract-action`, never shape a fill, for any contract/action other than `marketpools.swapTokens`, `market.sell`, or `market.buy`. [claims: settlement-is-market-action]
+- `no-missing-transfer-fill`: The operation must refuse with reason `no-completed-transfer`, never shape a fill, when the resolved operation's logs carry no matching paid-and-received transfer pair for `input.account`. [claims: resting-transaction-event-count, counterparty-leg-count]
 ## Laws
-none
+- `fill-settles-in-crossing-transaction` | Hive-Engine sidechain, measured | 2026-10-19 | data/records/2026-10-19-work-order-evidence/hive-engine-fill-leo-oivas-sell.json | Applies to `account-scoped-transfer-legs`, `crossing-transaction-settles` and `no-missing-transfer-fill`. | On the live sidechain a trade settles in the transaction of the order that crosses the book: that transaction's logs carry the crossing account's `tokens.transferToContract` paid leg and `tokens.transferFromContract` received leg, plus the counterparty's own `transferFromContract` leg, while the resting order's earlier transaction records only its escrow `transferToContract`. A fill therefore exists for an account only where both of its own legs appear in the one resolved transaction.
+- `fill-is-booked-on-agreed-database-hash` | Hive-Engine sidechain, measured | 2026-10-19 | data/records/2026-10-19-work-order-evidence/hive-engine-fill-leo-oivas-sell.json | Applies to `two-node-witness` and `no-booking-on-disagreement`. | Every node returns a `databaseHash` with a transaction's result, and nodes of different operators returned the identical hash for the same transaction; agreement among independent nodes is therefore the witness, a fill is booked only when every queried node agrees, and one node's report alone books nothing.
+- `rpc-path-is-node-specific` | Hive-Engine sidechain, measured | 2026-10-19 | data/records/2026-10-19-work-order-evidence/hive-engine-fill-leo-oivas-sell.json | Applies to `unreachable-path-is-no-witness` and `two-node-witness`. | The blockchain RPC path is not uniform across public nodes: some serve it under `/rpc/blockchain`, others only under `/blockchain`; a node base URL is a usable witness only if it answers `getTransactionInfo` at the path this operation calls.
 ## Standards
 - `hive-engine-rpc` | Hive-Engine sidechain JSON-RPC | live | https://api.hive-engine.com/rpc/blockchain | Applies to `two-node-witness` and `exact-operation-resolution`. | `getTransactionInfo` takes `{txid}` and returns either one operation object or an array of operations sharing the underlying Hive transaction id; each carries its own `databaseHash`, `blockNumber`, `contract`, `action`, and JSON-encoded `logs.events`.
 - `node-esm-operation` | Node.js | v24.2.0+ | https://nodejs.org/docs/v24/api/esm.html | Applies to the .mjs operation. | The operation uses the global `fetch` (or an injected `input.fetchImpl` for tests) with no runtime dependencies.
 ## Open questions
 none
+## Claims
+- `agreeing-node-count` | measured | parameter | Public nodes that returned one identical databaseHash for the crossing (sell) transaction of a recent LEO/SWAP.HIVE trade, and again one identical hash for the resting (buy) transaction | 5 nodes | data/records/2026-10-19-work-order-evidence/hive-engine-fill-leo-oivas-sell.json | sha256:31f6faaa21aca84a9e630dfb014abab4608929082382a1cb709bdc9edb988afc | getTransactionInfo on api.hive-engine.com, api2.hive-engine.com, herpc.dtools.dev, herpc.actifit.io and api.primersion.com returned databaseHash 360c8c2e0ff92f4e06031f73593a1e9f69aba69c4f90c146c39d8d47a65f64e2 at block 63845990 for the sell and 3a4824d803b56639de187db222016e6170fe95d3ef12f54f1eb7b3589778bf14 at block 63845985 for the buy (2026-10-19)
+- `minimum-witness-nodes` | derived | parameter | The least number of nodes that can witness agreement on a databaseHash: agreement is a relation between a pair, and one node alone agrees with nothing | 2 nodes | claim:agreeing-node-count; citation:definition of agreement, a relation between a pair | Five independent nodes were measured agreeing, so agreement is attainable across operators; the smallest set in which agreement can be tested is a pair
+- `counterparty-leg-count` | measured | parameter | Third-party `tokens.transferFromContract` legs in the crossing transaction beside the crossing account's own two legs | 1 legs | data/records/2026-10-19-work-order-evidence/hive-engine-fill-leo-oivas-sell.json | sha256:31f6faaa21aca84a9e630dfb014abab4608929082382a1cb709bdc9edb988afc | The sell transaction 6dc67deff10fe4a1e2da0070bf00e82a5682efb6 logged transferToContract from oivas, transferFromContract to leotaker (the counterparty), and transferFromContract to oivas (2026-10-19)
+- `resting-transaction-event-count` | measured | parameter | Events in the logs of the resting buy order's placement transaction | 1 events | data/records/2026-10-19-work-order-evidence/hive-engine-fill-leo-oivas-sell.json | sha256:31f6faaa21aca84a9e630dfb014abab4608929082382a1cb709bdc9edb988afc | Transaction fe3171ce4bf332b291851573166ed2ac285f417b logged only tokens.transferToContract from leotaker to market, no transferFromContract, on all five nodes (2026-10-19)
+- `path-miss-node-count` | measured | parameter | Probed public nodes that return no result at /rpc/blockchain | 3 nodes | data/records/2026-10-19-work-order-evidence/hive-engine-fill-leo-oivas-sell.json | sha256:31f6faaa21aca84a9e630dfb014abab4608929082382a1cb709bdc9edb988afc | POST getTransactionInfo to /rpc/blockchain on herpc.dtools.dev, herpc.actifit.io and api.primersion.com answered a not-found status with no result, while the same nodes answered at /blockchain (2026-10-19)
+- `path-miss-status` | measured | parameter | The HTTP status those nodes returned at /rpc/blockchain | 404 status | data/records/2026-10-19-work-order-evidence/hive-engine-fill-leo-oivas-sell.json | sha256:31f6faaa21aca84a9e630dfb014abab4608929082382a1cb709bdc9edb988afc | pathProbe records status 404 for each of the three nodes (2026-10-19)
+- `settlement-is-market-action` | derived | world | A trade is settled by the crossing order's market action, so a transaction of any other contract/action is no fill for this operation | none | constraint:fill-settles-in-crossing-transaction | The law places the settlement legs in the crossing market transaction, so an action outside the market set has no such legs to read
 ## Package
 ```json
-{"packageName":"@red-cup-engineering/read-hive-engine-fill-service","packageVersion":"0.1.0","license":"UNLICENSED","dependencies":{},"devDependencies":{}}
+{"packageName":"@red-cup-engineering/read-hive-engine-fill-service","packageVersion":"0.1.1","license":"UNLICENSED","dependencies":{},"devDependencies":{}}
 ```
 ## Operation
 ```mjs path=scripts/read-hive-engine-fill.mjs
@@ -227,6 +239,26 @@ test("a market sell fill shapes as a sell using only the proceeds transfer addre
   assert.equal(result.fill.quoteAmount, "1.02172637");
 });
 
+test("a resting order's placement transaction, carrying only its escrow leg, refuses and never shapes a fill", async () => {
+  const resting = { ...SWAP_RESULT, contract: "market", action: "buy", sender: "michael561", logs: JSON.stringify({ events: [
+    { contract: "tokens", event: "transferToContract", data: { from: "michael561", to: "market", symbol: "SWAP.HIVE", quantity: "0.23791456" } },
+  ] }) };
+  const fetchImpl = fakeFetch({ "https://node-a": { jsonrpc: "2.0", id: 1, result: resting }, "https://node-b": { jsonrpc: "2.0", id: 1, result: resting } });
+  const result = await readHiveEngineFill({ transactionId: SWAP_TX, account: "michael561", date: "2026-10-19", nodes: ["https://node-a", "https://node-b"], fetchImpl });
+  assert.equal(result.ok, false);
+  assert.equal(result.refusal.reason, "no-completed-transfer");
+});
+
+test("a node that returns no result at the called path is refused as ambiguous, never counted as a witness", async () => {
+  const fetchImpl = fakeFetch({
+    "https://node-a": { jsonrpc: "2.0", id: 1, result: SWAP_RESULT },
+    "https://node-b": { statusCode: 404, statusMessage: "Cannot find any path matching /rpc/blockchain.", stack: [] },
+  });
+  const result = await readHiveEngineFill({ transactionId: SWAP_TX, account: "michael561", date: "2026-09-05", nodes: ["https://node-a", "https://node-b"], fetchImpl });
+  assert.equal(result.ok, false);
+  assert.equal(result.refusal.reason, "ambiguous-result");
+});
+
 test("disagreeing witness nodes produce a witness-disagreement refusal, not a fill", async () => {
   const fetchImpl = fakeFetch({
     "https://node-a": { jsonrpc: "2.0", id: 1, result: SWAP_RESULT },
@@ -268,14 +300,16 @@ test("a multi-operation array result with no exact transactionId match refuses a
 });
 ```
 ## Examples
-```json name="the real leg-one Hive-Engine marketpools swap resolves to a buy fill witnessed by two nodes"
-{"input":{"transactionId":"a6308f23ba5026f1e670e61cea257eaf62524322-0","account":"michael561","date":"2026-09-05","nodes":["https://api.hive-engine.com","https://api2.hive-engine.com"]},"output":{"ok":true,"fill":{"venue":"hive-engine","account":"michael561","fillId":"a6308f23ba5026f1e670e61cea257eaf62524322-0","date":"2026-09-05","side":"buy","baseCommodity":"GLD","quoteCommodity":"SWAP.HIVE","baseQuantity":"4.1917","quoteAmount":"0.99502065","feeAmount":"0","mandateId":"manual","witnessBlock":"62583781","witnesses":[{"node":"https://api.hive-engine.com","databaseHash":"125f9476df1fcb03217e6dc705cbb1711aa253ef8d153ba7d50eb69ee10f3d58"},{"node":"https://api2.hive-engine.com","databaseHash":"125f9476df1fcb03217e6dc705cbb1711aa253ef8d153ba7d50eb69ee10f3d58"}],"venuePoolFee":{"symbol":"SWAP.HIVE","amount":"0.00249379"}}}}
+```json name="the measured 2026-10-19 LEO sell by oivas, settled in its crossing transaction, resolves to a sell fill witnessed by two nodes"
+{"input":{"transactionId":"6dc67deff10fe4a1e2da0070bf00e82a5682efb6","account":"oivas","date":"2026-10-19","nodes":["https://api.hive-engine.com","https://api2.hive-engine.com"]},"output":{"ok":true,"fill":{"venue":"hive-engine","account":"oivas","fillId":"6dc67deff10fe4a1e2da0070bf00e82a5682efb6","date":"2026-10-19","side":"sell","baseCommodity":"LEO","quoteCommodity":"SWAP.HIVE","baseQuantity":"0.117","quoteAmount":"0.00809656","feeAmount":"0","mandateId":"manual","witnessBlock":"63845990","witnesses":[{"node":"https://api.hive-engine.com","databaseHash":"360c8c2e0ff92f4e06031f73593a1e9f69aba69c4f90c146c39d8d47a65f64e2"},{"node":"https://api2.hive-engine.com","databaseHash":"360c8c2e0ff92f4e06031f73593a1e9f69aba69c4f90c146c39d8d47a65f64e2"}],"venuePoolFee":null}}}
 ```
 ## Traceability
 - `two-node-witness` -> projection `jsnode-operation-package`; acceptance `jsnode-package-assays`; constraints `hive-engine-rpc`, `node-esm-operation`
 - `exact-operation-resolution` -> projection `jsnode-operation-package`; acceptance `jsnode-package-assays`; constraints `hive-engine-rpc`
 - `account-scoped-transfer-legs` -> projection `jsnode-operation-package`; acceptance `jsnode-package-assays`; constraints `hive-engine-rpc`
 - `contract-action-shape` -> projection `jsnode-operation-package`; acceptance `jsnode-package-assays`; constraints `hive-engine-rpc`
+- `crossing-transaction-settles` -> projection `jsnode-operation-package`; acceptance `jsnode-package-assays`; constraints `hive-engine-rpc`
+- `unreachable-path-is-no-witness` -> projection `jsnode-operation-package`; acceptance `jsnode-package-assays`; constraints `hive-engine-rpc`
 - `informational-pool-fee` -> projection `jsnode-operation-package`; acceptance `jsnode-package-assays`; constraints `hive-engine-rpc`
 - `no-booking-on-disagreement` -> projection `jsnode-operation-package`; acceptance `jsnode-package-assays`; constraints `hive-engine-rpc`
 - `no-unsupported-action-fill` -> projection `jsnode-operation-package`; acceptance `jsnode-package-assays`; constraints `hive-engine-rpc`
