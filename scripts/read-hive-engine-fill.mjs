@@ -1,10 +1,15 @@
 #!/usr/bin/env node
-import { EngineClient } from "@red-cup-engineering/hive-blockchain-client-service/engine.mjs";
-import { runJavascriptNodeOperation } from "@red-cup-engineering/javascript-node-operation-engineering-services-section/operation";
 const SUPPORTED_ACTIONS = new Set(["marketpools:swapTokens", "market:sell", "market:buy"]);
 
-function queryNode(node, transactionId, fetchImpl) {
-  return new EngineClient({ nodes: [node], fetch: fetchImpl }).getTransactionInfo(transactionId);
+async function queryNode(node, transactionId, fetchImpl) {
+  const response = await fetchImpl(`${node}/rpc/blockchain`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getTransactionInfo", params: { txid: transactionId } }),
+  });
+  const body = await response.json();
+  if (body.error) throw new Error(`read-hive-engine-fill: node ${node} returned error: ${JSON.stringify(body.error)}`);
+  return body.result;
 }
 
 function resolveOperation(result, transactionId) {
@@ -94,6 +99,12 @@ export async function readHiveEngineFill(input) {
 }
 
 if (import.meta.main) {
-  const result = await runJavascriptNodeOperation({ name: "read-hive-engine-fill", description: "Read one Hive-Engine `marketpools.swapTokens`, `market.sell`, or `market.buy` fill by transaction id from at least two public nodes, refusing without shaping a fill when the nodes disagree on `databaseHash`, the operation cannot be resolved unambiguously, its contract/action is not one of the supported market actions, or its logs carry no completed token transfer to and from `input.account`.", operation: readHiveEngineFill }, { arguments: process.argv.slice(2), standardInput: process.stdin, standardOutput: process.stdout });
-  process.exitCode = result.exitCode;
+  let text = "";
+  for await (const chunk of process.stdin) text += chunk;
+  try {
+    process.stdout.write(`${JSON.stringify(await readHiveEngineFill(JSON.parse(text)), null, 2)}\n`);
+  } catch (error) {
+    process.stderr.write(`${JSON.stringify({ error: error.message })}\n`);
+    process.exit(2);
+  }
 }

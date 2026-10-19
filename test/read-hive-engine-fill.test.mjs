@@ -90,6 +90,26 @@ test("a market sell fill shapes as a sell using only the proceeds transfer addre
   assert.equal(result.fill.quoteAmount, "1.02172637");
 });
 
+test("a resting order's placement transaction, carrying only its escrow leg, refuses and never shapes a fill", async () => {
+  const resting = { ...SWAP_RESULT, contract: "market", action: "buy", sender: "michael561", logs: JSON.stringify({ events: [
+    { contract: "tokens", event: "transferToContract", data: { from: "michael561", to: "market", symbol: "SWAP.HIVE", quantity: "0.23791456" } },
+  ] }) };
+  const fetchImpl = fakeFetch({ "https://node-a": { jsonrpc: "2.0", id: 1, result: resting }, "https://node-b": { jsonrpc: "2.0", id: 1, result: resting } });
+  const result = await readHiveEngineFill({ transactionId: SWAP_TX, account: "michael561", date: "2026-10-19", nodes: ["https://node-a", "https://node-b"], fetchImpl });
+  assert.equal(result.ok, false);
+  assert.equal(result.refusal.reason, "no-completed-transfer");
+});
+
+test("a node that returns no result at the called path is refused as ambiguous, never counted as a witness", async () => {
+  const fetchImpl = fakeFetch({
+    "https://node-a": { jsonrpc: "2.0", id: 1, result: SWAP_RESULT },
+    "https://node-b": { statusCode: 404, statusMessage: "Cannot find any path matching /rpc/blockchain.", stack: [] },
+  });
+  const result = await readHiveEngineFill({ transactionId: SWAP_TX, account: "michael561", date: "2026-09-05", nodes: ["https://node-a", "https://node-b"], fetchImpl });
+  assert.equal(result.ok, false);
+  assert.equal(result.refusal.reason, "ambiguous-result");
+});
+
 test("disagreeing witness nodes produce a witness-disagreement refusal, not a fill", async () => {
   const fetchImpl = fakeFetch({
     "https://node-a": { jsonrpc: "2.0", id: 1, result: SWAP_RESULT },
